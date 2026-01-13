@@ -5,9 +5,11 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Activate venv if exists
-if [ -d "venv" ]; then
-    source venv/bin/activate
+# Activate venv (Windows or Unix)
+if [ -f "venv/Scripts/activate" ]; then
+    source venv/Scripts/activate  # Windows
+elif [ -f "venv/bin/activate" ]; then
+    source venv/bin/activate      # Unix
 fi
 
 # Run FL cycle

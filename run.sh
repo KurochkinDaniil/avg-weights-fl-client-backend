@@ -3,8 +3,11 @@
 
 cd "$(dirname "$0")"
 
-if [ -d "venv" ]; then
-    source venv/bin/activate
+# Activate venv (Windows or Unix)
+if [ -f "venv/Scripts/activate" ]; then
+    source venv/Scripts/activate  # Windows
+elif [ -f "venv/bin/activate" ]; then
+    source venv/bin/activate      # Unix
 fi
 
 export PYTHONPATH="$(pwd):$PYTHONPATH"
