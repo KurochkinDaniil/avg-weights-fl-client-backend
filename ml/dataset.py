@@ -16,7 +16,9 @@ class SwipeDataset(Dataset):
         self,
         jsonl_files: List[Path],
         char2idx: Dict[str, int],
-        max_length: int = 300
+        max_length: int = 300,
+        keyboard_width: float = 1080.0,
+        keyboard_height: float = 631.0
     ):
         """
         Initialize SwipeDataset.
@@ -25,9 +27,13 @@ class SwipeDataset(Dataset):
             jsonl_files: List of JSONL file paths
             char2idx: Character to index mapping
             max_length: Maximum sequence length (padding/truncation)
+            keyboard_width: Keyboard width in pixels (default: 1080)
+            keyboard_height: Keyboard height in pixels (default: 631)
         """
         self.max_length = max_length
         self.char2idx = char2idx
+        self.keyboard_width = keyboard_width
+        self.keyboard_height = keyboard_height
         self.samples = []
         
         # Load all samples from JSONL files
@@ -54,8 +60,8 @@ class SwipeDataset(Dataset):
         """
         sample = self.samples[idx]
         
-        # Preprocess coordinates
-        features = preprocess_swipe(sample["coords"])
+        # Preprocess coordinates (expects pixel coordinates)
+        features = preprocess_swipe(sample["coords"], self.keyboard_width, self.keyboard_height)
         seq = torch.tensor(features, dtype=torch.float32)
         
         # Convert word to indices

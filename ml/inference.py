@@ -10,7 +10,14 @@ from .preprocessing import preprocess_swipe
 class SwipePredictor:
     """Predictor for swipe gesture recognition."""
     
-    def __init__(self, model_path: Path, char_mappings: tuple, device: str = "cpu"):
+    def __init__(
+        self, 
+        model_path: Path, 
+        char_mappings: tuple, 
+        device: str = "cpu",
+        keyboard_width: float = 1080.0,
+        keyboard_height: float = 631.0
+    ):
         """
         Initialize predictor.
         
@@ -18,9 +25,13 @@ class SwipePredictor:
             model_path: Path to model weights
             char_mappings: Tuple of (char2idx, idx2char)
             device: Device to run inference on
+            keyboard_width: Keyboard width in pixels (default: 1080)
+            keyboard_height: Keyboard height in pixels (default: 631)
         """
         self.device = torch.device(device)
         self.char2idx, self.idx2char = char_mappings
+        self.keyboard_width = keyboard_width
+        self.keyboard_height = keyboard_height
         
         self.model = SwipeLSTM(
             input_size=7,
@@ -37,7 +48,8 @@ class SwipePredictor:
         Predict word from swipe coordinates.
         
         Args:
-            coords: List of coordinate dicts [{"x": 0.3, "y": 0.4, "t": 0.0}, ...]
+            coords: List of coordinate dicts [{"x": 342.3, "y": 263.1, "t": 0.0}, ...]
+                    where x, y are in PIXELS
         
         Returns:
             Predicted word
@@ -45,11 +57,15 @@ class SwipePredictor:
         import logging
         logger = logging.getLogger(__name__)
         
+        # Validation
+        if len(coords) < 2:
+            raise ValueError("Need at least 2 points for prediction")
+        
         logger.info(f"Received {len(coords)} points")
         logger.info(f"First point: {coords[0] if coords else 'none'}")
         logger.info(f"Last point: {coords[-1] if coords else 'none'}")
         
-        features = preprocess_swipe(coords)
+        features = preprocess_swipe(coords, self.keyboard_width, self.keyboard_height)
         logger.info(f"Features shape: {features.shape}")
         logger.info(f"Features min/max: {features.min():.3f}/{features.max():.3f}")
         
@@ -61,7 +77,18 @@ class SwipePredictor:
         
         pred_ids = self._ctc_greedy_decode(log_probs)
         logger.info(f"Predicted indices: {pred_ids[0][:10]}")
-        pred_word = ''.join(self.idx2char[i] for i in pred_ids[0])
+        
+        # FIXED: Filter out special tokens and handle space
+        skip_tokens = {'_', 'shift', 'backspace', 'toNumberState', 'globe', 'enter'}
+        
+        decoded_chars = []
+        for i in pred_ids[0]:
+            char = self.idx2char.get(i, '')
+            if char and char not in skip_tokens:
+                # Convert 'space' token to actual space
+                decoded_chars.append(' ' if char == 'space' else char)
+        
+        pred_word = ''.join(decoded_chars).strip()
         
         return pred_word
     

@@ -91,7 +91,9 @@ def run_federated_cycle():
     dataset = SwipeDataset(
         jsonl_files=jsonl_files,
         char2idx=char2idx,
-        max_length=settings.max_seq_len
+        max_length=settings.max_seq_len,
+        keyboard_width=1080.0,
+        keyboard_height=631.0
     )
     
     logger.info(f"✓ Loaded {len(dataset)} samples from {len(jsonl_files)} files")
