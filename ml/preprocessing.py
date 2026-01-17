@@ -2,18 +2,28 @@ import numpy as np
 from typing import List, Dict
 
 
-def preprocess_swipe(coords: List[Dict[str, float]]) -> np.ndarray:
+def preprocess_swipe(
+    coords: List[Dict[str, float]], 
+    keyboard_width: float = 1080.0, 
+    keyboard_height: float = 631.0
+) -> np.ndarray:
     """
     Preprocess swipe coordinates into model features.
     
-    Converts raw coordinates into features:
+    Compute derivatives from PIXEL coordinates, then normalize all features.
+    This matches the approach where velocities/accelerations are computed from raw pixels.
+    
+    Converts pixel coordinates into normalized features:
     - x, y: normalized coordinates (0..1)
     - dt: time delta
-    - vx, vy: velocity
-    - ax, ay: acceleration
+    - vx, vy: normalized velocity
+    - ax, ay: normalized acceleration
     
     Args:
-        coords: List of coordinate dicts [{"x": 0.3, "y": 0.4, "t": 0.0}, ...]
+        coords: List of coordinate dicts [{"x": 342.3, "y": 263.1, "t": 0.0}, ...]
+                where x, y are in PIXELS (x: 0-1080, y: 0-631)
+        keyboard_width: Keyboard width in pixels (default: 1080)
+        keyboard_height: Keyboard height in pixels (default: 631)
     
     Returns:
         Feature array of shape (seq_len, 7) with columns [x, y, dt, vx, vy, ax, ay]
@@ -21,26 +31,34 @@ def preprocess_swipe(coords: List[Dict[str, float]]) -> np.ndarray:
     if not coords:
         raise ValueError("Empty coordinates list")
     
-    # Extract arrays
-    x = np.array([p["x"] for p in coords], dtype=np.float32)
-    y = np.array([p["y"] for p in coords], dtype=np.float32)
+    # Extract PIXEL arrays
+    x_pixel = np.array([p["x"] for p in coords], dtype=np.float32)
+    y_pixel = np.array([p["y"] for p in coords], dtype=np.float32)
     t = np.array([p["t"] for p in coords], dtype=np.float32)
     
     # Compute dt (time delta)
     dt = np.diff(t, prepend=t[0])
     
-    # Compute velocity with proper normalization
-    dx = np.gradient(x)
-    dy = np.gradient(y)
+    # Compute velocity FROM PIXELS
+    dx_pixel = np.gradient(x_pixel)
+    dy_pixel = np.gradient(y_pixel)
     dt_grad = np.gradient(t)
     dt_grad = np.where(dt_grad == 0, 1e-8, dt_grad)  # avoid division by zero
     
-    vx = dx / dt_grad
-    vy = dy / dt_grad
+    vx_pixel = dx_pixel / dt_grad  # pixels/sec
+    vy_pixel = dy_pixel / dt_grad  # pixels/sec
     
-    # Compute acceleration
-    ax = np.gradient(vx) / dt_grad
-    ay = np.gradient(vy) / dt_grad
+    # Compute acceleration FROM PIXEL VELOCITIES
+    ax_pixel = np.gradient(vx_pixel) / dt_grad  # pixels/sec²
+    ay_pixel = np.gradient(vy_pixel) / dt_grad  # pixels/sec²
+    
+    # NOW NORMALIZE EVERYTHING
+    x = x_pixel / keyboard_width      # 0-1
+    y = y_pixel / keyboard_height     # 0-1
+    vx = vx_pixel / keyboard_width    # normalized_units/sec
+    vy = vy_pixel / keyboard_height   # normalized_units/sec
+    ax = ax_pixel / keyboard_width    # normalized_units/sec²
+    ay = ay_pixel / keyboard_height   # normalized_units/sec²
     
     # Clip extreme values to match training data range
     vx = np.clip(vx, -10, 10)
