@@ -1,69 +1,72 @@
 """API routes for swipe gesture collection."""
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, BackgroundTasks, status
 from typing import Dict
 import logging
-from pathlib import Path
 
 from api.models import SwipeRequest, SwipeResponse
-from storage.local_storage import LocalStorage
-from config import settings
-from ml.inference import SwipePredictor
-from ml.preprocessing import build_char_mappings
+from services import PredictionService, StorageService, TrainingService
+from core.exceptions import (
+    ModelNotLoadedException,
+    PredictionException,
+    StorageException,
+    TrainingException
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["swipes"])
 
-# Initialize storage
-storage = LocalStorage(settings.data_dir)
-
-# Initialize predictor
-char2idx, idx2char = build_char_mappings(settings.alphabet)
-model_path = Path(__file__).parent.parent / "model2.pt"
-
-try:
-    predictor = SwipePredictor(model_path, (char2idx, idx2char))
-    logger.info(f"Loaded model from {model_path}")
-except Exception as e:
-    logger.warning(f"Could not load model: {e}")
-    predictor = None
+# Initialize services
+prediction_service = PredictionService()
+storage_service = StorageService()
+training_service = TrainingService()
 
 
-@router.post("/swipes", response_model=SwipeResponse, status_code=status.HTTP_201_CREATED)
-async def receive_swipe(swipe: SwipeRequest) -> SwipeResponse:
+@router.post("/swipes", response_model=SwipeResponse, status_code=status.HTTP_202_ACCEPTED)
+async def receive_swipe(
+    swipe: SwipeRequest,
+    background_tasks: BackgroundTasks
+) -> SwipeResponse:
     """
     Receive and store swipe gesture from frontend.
     
+    Uses background task for storage to avoid blocking the response.
+    
     Args:
         swipe: Swipe gesture data
+        background_tasks: FastAPI background tasks
     
     Returns:
-        Response with status and gesture ID
+        Response with status and gesture ID (202 Accepted)
     """
     try:
-        # Convert to dict for storage
-        swipe_data = {
-            "gesture_id": swipe.gesture_id,
-            "coords": [{"x": p.x, "y": p.y, "t": p.t} for p in swipe.coords],
-            "word": swipe.word
-        }
+        # Convert to list of dicts
+        coords = [{"x": p.x, "y": p.y, "t": p.t} for p in swipe.coords]
         
-        # Save to local storage
-        storage.save_swipe(swipe_data)
+        # Add storage task to background
+        background_tasks.add_task(
+            storage_service.save_swipe,
+            gesture_id=swipe.gesture_id,
+            coords=coords,
+            word=swipe.word
+        )
         
-        logger.info(f"Received swipe: {swipe.gesture_id}, word: {swipe.word}, points: {len(swipe.coords)}")
+        logger.info(
+            f"Accepted swipe: {swipe.gesture_id}, "
+            f"word: '{swipe.word}', points: {len(coords)} (saving in background)"
+        )
         
         return SwipeResponse(
-            status="success",
+            status="accepted",
             gesture_id=swipe.gesture_id,
-            message=f"Swipe gesture saved successfully"
+            message="Swipe gesture accepted, saving in background"
         )
     
     except Exception as e:
-        logger.error(f"Error saving swipe: {e}")
+        logger.error(f"Error accepting swipe: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to save swipe gesture: {str(e)}"
+            detail=f"Failed to accept swipe gesture: {str(e)}"
         )
 
 
@@ -78,28 +81,33 @@ async def predict_swipe(swipe: SwipeRequest) -> Dict:
     Returns:
         Dictionary with predicted word
     """
-    if predictor is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Model not loaded"
-        )
-    
     try:
         coords = [{"x": p.x, "y": p.y, "t": p.t} for p in swipe.coords]
-        predicted_word = predictor.predict(coords)
-        
-        logger.info(f"Predicted: {predicted_word} for gesture {swipe.gesture_id}")
+        predicted_word = prediction_service.predict(coords)
         
         return {
             "gesture_id": swipe.gesture_id,
             "predicted_word": predicted_word
         }
     
-    except Exception as e:
-        logger.error(f"Error predicting swipe: {e}")
+    except ModelNotLoadedException:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Model not loaded"
+        )
+    
+    except PredictionException as e:
+        logger.error(f"Prediction failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Prediction failed: {str(e)}"
+            detail=str(e.message)
+        )
+    
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error"
         )
 
 
@@ -112,18 +120,54 @@ async def get_stats() -> Dict:
         Dictionary with statistics
     """
     try:
-        total_samples = storage.count_samples()
-        jsonl_files = storage.get_all_jsonl_files()
+        return storage_service.get_stats()
+    
+    except StorageException as e:
+        logger.error(f"Failed to get stats: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e.message)
+        )
+    
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error"
+        )
+
+
+@router.post("/train", response_model=Dict, status_code=status.HTTP_202_ACCEPTED)
+async def start_training(background_tasks: BackgroundTasks) -> Dict:
+    """
+    Start federated learning training cycle in background.
+    
+    Training includes:
+    1. Download global weights from server (MinIO)
+    2. Train on local data
+    3. Upload delta to server
+    4. Hot reload model with new weights
+    
+    Args:
+        background_tasks: FastAPI background tasks
+    
+    Returns:
+        Response indicating training has started
+    """
+    try:
+        # Add training task to background
+        background_tasks.add_task(training_service.run_training_cycle)
+        
+        logger.info("FL training cycle started in background")
         
         return {
-            "total_samples": total_samples,
-            "total_files": len(jsonl_files),
-            "files": [str(f.relative_to(settings.data_dir)) for f in jsonl_files]
+            "status": "training_started",
+            "message": "Federated learning training cycle started in background"
         }
     
     except Exception as e:
-        logger.error(f"Error getting stats: {e}")
+        logger.error(f"Failed to start training: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get statistics: {str(e)}"
+            detail=f"Failed to start training: {str(e)}"
         )
