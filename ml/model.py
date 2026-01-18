@@ -71,8 +71,15 @@ class SwipeLSTM(nn.Module):
         """
         local_weights = self.state_dict()
         delta = {}
+        
+        # Get device from local weights (could be cpu or cuda)
+        device = next(iter(local_weights.values())).device
+        
         for key in local_weights:
-            delta[key] = local_weights[key] - global_weights[key]
+            # Move global weights to same device as local weights
+            global_weight = global_weights[key].to(device)
+            delta[key] = local_weights[key] - global_weight
+        
         return delta
     
     def apply_delta(self, global_weights: Dict[str, torch.Tensor], delta: Dict[str, torch.Tensor]) -> None:
@@ -83,7 +90,14 @@ class SwipeLSTM(nn.Module):
             global_weights: Global model weights
             delta: Delta weights to apply
         """
+        # Get device from model parameters
+        device = next(self.parameters()).device
+        
         new_weights = {}
         for key in global_weights:
-            new_weights[key] = global_weights[key] + delta[key]
+            # Ensure both tensors are on the same device
+            global_weight = global_weights[key].to(device)
+            delta_weight = delta[key].to(device)
+            new_weights[key] = global_weight + delta_weight
+        
         self.load_state_dict(new_weights)
