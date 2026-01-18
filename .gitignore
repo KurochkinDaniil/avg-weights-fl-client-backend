@@ -1,0 +1,25 @@
+cat > .gitignore <<'EOF'
+# Python caches
+__pycache__/
+**/__pycache__/
+*.py[cod]
+
+# Virtual envs
+venv/
+.venv/
+
+# Local markers / tooling
+.deps_installed
+
+# Local datasets / artifacts
+*.csv
+*.jsonl
+*.parquet
+*.pt
+*.pth
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+EOF
