@@ -1,5 +1,7 @@
 import numpy as np
+import pandas as pd
 from typing import List, Dict
+from sklearn.preprocessing import MinMaxScaler
 
 
 def preprocess_swipe(
@@ -10,20 +12,21 @@ def preprocess_swipe(
     """
     Preprocess swipe coordinates into model features.
     
-    Compute derivatives from PIXEL coordinates, then normalize all features.
-    This matches the approach where velocities/accelerations are computed from raw pixels.
+    Updated version from colleague:
+    - Uses pandas for cleaner data manipulation
+    - Uses MinMaxScaler for normalization of x, y, dt ONLY
+    - Velocities and accelerations are NOT normalized (only clipped)
     
-    Converts pixel coordinates into normalized features:
-    - x, y: normalized coordinates (0..1)
-    - dt: time delta
-    - vx, vy: normalized velocity
-    - ax, ay: normalized acceleration
+    Converts pixel coordinates into features:
+    - x, y, dt: normalized (0..1) using MinMaxScaler
+    - vx, vy: velocity in pixels/time, clipped to [-10, 10]
+    - ax, ay: acceleration in pixels/time², clipped to [-10, 10]
     
     Args:
         coords: List of coordinate dicts [{"x": 342.3, "y": 263.1, "t": 0.0}, ...]
                 where x, y are in PIXELS (x: 0-1080, y: 0-631)
-        keyboard_width: Keyboard width in pixels (default: 1080)
-        keyboard_height: Keyboard height in pixels (default: 631)
+        keyboard_width: Keyboard width in pixels (default: 1080, not used in new version)
+        keyboard_height: Keyboard height in pixels (default: 631, not used in new version)
     
     Returns:
         Feature array of shape (seq_len, 7) with columns [x, y, dt, vx, vy, ax, ay]
@@ -31,45 +34,48 @@ def preprocess_swipe(
     if not coords:
         raise ValueError("Empty coordinates list")
     
-    # Extract PIXEL arrays
-    x_pixel = np.array([p["x"] for p in coords], dtype=np.float32)
-    y_pixel = np.array([p["y"] for p in coords], dtype=np.float32)
-    t = np.array([p["t"] for p in coords], dtype=np.float32)
-    
-    # Compute dt (time delta)
-    dt = np.diff(t, prepend=t[0])
-    
-    # Compute velocity FROM PIXELS
-    dx_pixel = np.gradient(x_pixel)
-    dy_pixel = np.gradient(y_pixel)
-    dt_grad = np.gradient(t)
-    dt_grad = np.where(dt_grad == 0, 1e-8, dt_grad)  # avoid division by zero
-    
-    vx_pixel = dx_pixel / dt_grad  # pixels/sec
-    vy_pixel = dy_pixel / dt_grad  # pixels/sec
-    
-    # Compute acceleration FROM PIXEL VELOCITIES
-    ax_pixel = np.gradient(vx_pixel) / dt_grad  # pixels/sec²
-    ay_pixel = np.gradient(vy_pixel) / dt_grad  # pixels/sec²
-    
-    # NOW NORMALIZE EVERYTHING
-    x = x_pixel / keyboard_width      # 0-1
-    y = y_pixel / keyboard_height     # 0-1
-    vx = vx_pixel / keyboard_width    # normalized_units/sec
-    vy = vy_pixel / keyboard_height   # normalized_units/sec
-    ax = ax_pixel / keyboard_width    # normalized_units/sec²
-    ay = ay_pixel / keyboard_height   # normalized_units/sec²
-    
-    # Clip extreme values to match training data range
-    vx = np.clip(vx, -10, 10)
-    vy = np.clip(vy, -10, 10)
-    ax = np.clip(ax, -10, 10)
-    ay = np.clip(ay, -10, 10)
-    
-    # Stack features
-    features = np.column_stack([x, y, dt, vx, vy, ax, ay])
-    
-    return features.astype(np.float32)
+    df = pd.DataFrame(coords)
+
+    # Вычисляем dt (разницу во времени)
+    df['dt'] = df['t'].diff()
+    df.loc[0, 'dt'] = 0  # первое значение
+    df['dt'] = df['dt'].replace(0, 1e-8)  # избегаем деления на ноль
+
+    # Вычисляем скорость
+    df['vx'] = df['x'].diff() / df['dt']
+    df['vy'] = df['y'].diff() / df['dt']
+
+    # Вычисляем ускорение
+    df['ax'] = df['vx'].diff() / df['dt']
+    df['ay'] = df['vy'].diff() / df['dt']
+
+    # Заменяем NaN значения (первые строки после diff)
+    df.fillna(0, inplace=True)
+
+    # Опционально: обрезаем экстремальные значения
+    clip_limit = 10
+    df['vx'] = df['vx'].clip(-clip_limit, clip_limit)
+    df['vy'] = df['vy'].clip(-clip_limit, clip_limit)
+    df['ax'] = df['ax'].clip(-clip_limit, clip_limit)
+    df['ay'] = df['ay'].clip(-clip_limit, clip_limit)
+
+    # Нормализация отдельно по каждой оси (ТОЛЬКО x, y, dt!)
+    scaler = MinMaxScaler()
+    df[['x', 'y', 'dt']] = scaler.fit_transform(df[['x', 'y', 'dt']])
+    df = df.drop(columns=['t'])
+
+    # Создаем DataFrame с признаками
+    features = np.column_stack([
+        df['x'].values,
+        df['y'].values,
+        df['dt'].values,
+        df['vx'].values,
+        df['vy'].values,
+        df['ax'].values,
+        df['ay'].values
+    ])
+
+    return features
 
 
 def word_to_indices(word: str, char2idx: Dict[str, int]) -> List[int]:

@@ -37,11 +37,14 @@ class StorageService:
         try:
             logger.info(f"Saving swipe: gesture_id={gesture_id}, word='{word}'")
             
-            self._storage.save_swipe(
-                gesture_id=gesture_id,
-                coords=coords,
-                word=word
-            )
+            # Prepare swipe data dict
+            swipe_data = {
+                "gesture_id": gesture_id,
+                "coords": coords,
+                "word": word
+            }
+            
+            self._storage.save_swipe(swipe_data)
             
             logger.info(f"✓ Swipe saved: {gesture_id}")
             

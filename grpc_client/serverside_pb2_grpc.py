@@ -2,7 +2,7 @@
 """Client and server classes corresponding to protobuf-defined services."""
 import grpc
 
-import serverside_pb2 as serverside__pb2
+from . import serverside_pb2 as serverside__pb2
 
 
 class AvgWeightsStub(object):
